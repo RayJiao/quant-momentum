@@ -64,6 +64,42 @@ def alpha_tstat(returns: pd.Series, benchmark_returns: pd.Series) -> tuple[float
     return alpha_daily * 252, alpha_daily / se_alpha
 
 
+def portfolio_returns_with_costs(
+    weights: pd.DataFrame,
+    prices: pd.DataFrame,
+    spread_bps: float = 10.0,
+) -> pd.Series:
+    """
+    Like portfolio_returns() but deducts estimated transaction costs.
+
+    Cost = (one-way turnover) × spread_bps / 10_000, applied on the first
+    day of each holding period.  One-way turnover = Σ|Δw| / 2.
+    """
+    daily_ret = prices.pct_change().dropna(how="all")
+    port_rets = []
+    months = weights.index
+    prev_w = pd.Series(0.0, index=weights.columns)
+
+    for i, month_end in enumerate(months[:-1]):
+        next_month_end = months[i + 1]
+        w = weights.loc[month_end].fillna(0.0)
+
+        turnover = (w - prev_w).abs().sum() / 2.0
+        cost = turnover * spread_bps / 10_000.0
+
+        mask = (daily_ret.index > month_end) & (daily_ret.index <= next_month_end)
+        period = daily_ret.loc[mask, w.index].fillna(0.0).dot(w)
+
+        if len(period) > 0:
+            period = period.copy()
+            period.iloc[0] -= cost
+
+        port_rets.append(period)
+        prev_w = w
+
+    return pd.concat(port_rets).sort_index()
+
+
 def run_backtest(weights: pd.DataFrame, prices: pd.DataFrame,
                  label: str = "Strategy") -> tuple[pd.Series, dict]:
     RESULTS_DIR.mkdir(exist_ok=True)
@@ -89,7 +125,11 @@ def _print_stats(label: str, stats: dict) -> None:
             print(f"  {k:<22}: {v:+.2%}")
 
 
-def compare_strategies(results: dict[str, tuple[pd.Series, dict]]) -> None:
+def compare_strategies(
+    results: dict[str, tuple[pd.Series, dict]],
+    title: str = "12-1 Momentum Factor Comparison  (2015–2025)",
+    output_name: str = "momentum_comparison.png",
+) -> None:
     """
     results: OrderedDict of {label: (daily_returns, stats_dict)}
     Prints a side-by-side table and saves a comparison chart.
@@ -135,8 +175,7 @@ def compare_strategies(results: dict[str, tuple[pd.Series, dict]]) -> None:
                     color=c, linewidth=1.6)
         ax_dd.fill_between(dd.index, dd.values, 0, alpha=0.4, color=c, label=f"{lb}  (MDD {mdd:.1%})")
 
-    ax_ret.set_title("12-1 Momentum Factor: Original vs. Improved  (S&P 500, 2015–2025)",
-                     fontsize=12, fontweight="bold")
+    ax_ret.set_title(title, fontsize=12, fontweight="bold")
     ax_ret.set_ylabel("Cumulative Return")
     ax_ret.legend(fontsize=9)
     ax_ret.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
@@ -149,7 +188,7 @@ def compare_strategies(results: dict[str, tuple[pd.Series, dict]]) -> None:
     ax_dd.grid(alpha=0.25)
 
     plt.tight_layout()
-    out = RESULTS_DIR / "momentum_comparison.png"
+    out = RESULTS_DIR / output_name
     plt.savefig(out, dpi=150)
     print(f"\nComparison chart saved → {out}")
     plt.close()
