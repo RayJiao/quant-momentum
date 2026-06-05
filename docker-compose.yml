@@ -1,0 +1,8 @@
+services:
+  momentum:
+    build: .
+    volumes:
+      - ./data:/app/data       # cache downloaded price data across runs
+      - ./results:/app/results # persist charts and reports
+    environment:
+      - PYTHONUNBUFFERED=1
